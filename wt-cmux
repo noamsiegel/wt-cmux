@@ -9,7 +9,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-VERSION="0.1.2"
+VERSION="0.1.3"
 DEFAULT_SOCKET="/tmp/cmux.sock"
 
 err() { printf '%s\n' "$*" >&2; }
@@ -199,36 +199,26 @@ cmd_manifest() {
 }
 
 cmd_health() {
-  local bin sock ok=true reason=()
+  local bin sock yq_bin cmux_available=false socket_available=false
   bin=$(cmux_bin)
   sock=$(socket_path)
+  yq_bin=$(command -v yq 2>/dev/null || true)
 
-  if [[ -z "$bin" ]]; then
-    ok=false
-    reason+=("cmux CLI not found")
+  if [[ -n "$bin" ]] && "$bin" ping >/dev/null 2>&1; then
+    cmux_available=true
   fi
-  if ! have yq; then
-    ok=false
-    reason+=("yq not installed")
-  fi
-  if [[ ! -S "$sock" ]]; then
-    ok=false
-    reason+=("cmux socket not available at $sock")
-  fi
-  if [[ -n "$bin" ]] && ! "$bin" ping >/dev/null 2>&1; then
-    ok=false
-    reason+=("cmux ping failed")
+  if [[ -S "$sock" ]]; then
+    socket_available=true
   fi
 
-  if [[ "$ok" == true ]]; then
-    printf '{"ok":true,"cmux":%s,"socket":%s,"yq":%s}\n' \
-      "$(json_string "$bin")" "$(json_string "$sock")" "$(json_string "$(command -v yq)")"
-  else
-    local joined="${reason[*]}"
-    printf '{"ok":false,"reason":%s,"cmux":%s,"socket":%s}\n' \
-      "$(json_string "$joined")" "$(json_string "$bin")" "$(json_string "$sock")"
+  if [[ -z "$yq_bin" ]]; then
+    printf '{"ok":false,"reason":"yq not installed","cmux":%s,"cmux_available":%s,"socket":%s,"socket_available":%s}\n' \
+      "$(json_string "$bin")" "$cmux_available" "$(json_string "$sock")" "$socket_available"
     exit 30
   fi
+
+  printf '{"ok":true,"cmux":%s,"cmux_available":%s,"socket":%s,"socket_available":%s,"yq":%s}\n' \
+    "$(json_string "$bin")" "$cmux_available" "$(json_string "$sock")" "$socket_available" "$(json_string "$yq_bin")"
 }
 
 cmd_event() {

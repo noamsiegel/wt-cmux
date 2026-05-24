@@ -1,0 +1,24 @@
+name: wt-cmux
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install yq bats-core noamsiegel/tap/git-wt
+
+      - name: Lint shell
+        run: bash -n wt-cmux
+
+      - name: Run bats suite
+        run: bats tests/
+
+      - name: Validate manifest against git-wt contract
+        run: git-wt plugin validate .

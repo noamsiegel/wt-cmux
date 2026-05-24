@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.3] - 2026-05-24
+
+### Added
+- `.github/workflows/test.yml`: CI runs `bash -n` + `bats tests/` + `git-wt plugin validate .` against every push and PR. The validate step catches manifest schema drift against `git-wt.plugin.v0`.
+
+### Fixed
+- `health` no longer returns exit 30 when the cmux CLI/socket are unavailable. Health output now reports runtime availability via `cmux_available` and `socket_available` fields, returning exit 0 if the manifest and parser deps are valid. Event handlers still fail if cmux is required and missing — this only changes the read-only `health` introspection contract. Required so `git-wt plugin validate .` works on CI runners without cmux installed.
+- Bumped manifest + script version to 0.1.3.
+
 ## [0.1.2] - 2026-05-24
 
 ### Added

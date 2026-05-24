@@ -71,12 +71,13 @@ EOF
   [ "$(printf '%s' "$output" | yq -p json -r '.api_versions[0]')" = "git-wt.plugin.v0" ]
 }
 
-@test "health reports cmux availability and missing socket" {
+@test "health reports tool availability without requiring live cmux" {
   run "$REPO_ROOT/wt-cmux" health
-  [ "$status" -eq 30 ]
-  [ "$(printf '%s' "$output" | yq -p json -r '.ok')" = "false" ]
-  [[ "$output" == *"cmux socket not available"* ]]
-  [[ "$output" == *"$WT_CMUX_BIN"* ]]
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | yq -p json -r '.ok')" = "true" ]
+  [ "$(printf '%s' "$output" | yq -p json -r '.cmux_available')" = "true" ]
+  [ "$(printf '%s' "$output" | yq -p json -r '.socket_available')" = "false" ]
+  [ "$(printf '%s' "$output" | yq -p json -r '.cmux')" = "$WT_CMUX_BIN" ]
 }
 
 @test "worktree-created creates cmux workspace and anchors it to worktree path" {
