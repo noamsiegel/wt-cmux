@@ -9,7 +9,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-VERSION="0.1.1"
+VERSION="0.1.2"
 DEFAULT_SOCKET="/tmp/cmux.sock"
 
 err() { printf '%s\n' "$*" >&2; }

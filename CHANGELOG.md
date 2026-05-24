@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.2] - 2026-05-24
+
+### Added
+- `RELEASING.md`: release checklist with version-site reminders (script + manifest), cmux smoke checks, `WT_CMUX_BIN` override note, and recovery steps.
+- `tests/test_version.bats`: asserts script `VERSION` matches `wt-plugin.json` version.
+
+### Changed
+- Bumped manifest + script version to 0.1.2.
+
 ## [0.1.1] - 2026-05-24
 
 ### Added
