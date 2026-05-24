@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.1] - 2026-05-24
+
+### Added
+- `CONTEXT.md` and `AGENTS.md` for plugin-specific invariants and agent orientation.
+
+### Changed
+- Slimmed `README.md` to plugin-specific behavior; links to `git-wt/docs/plugin-contract.md` for the protocol spec and to `git-wt/docs/plugins.md` for the family-wide comparison.
+- Bumped manifest + script version to 0.1.1.
+
 ## [0.1.0] - 2026-05-24
 
 ### Added

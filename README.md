@@ -1,8 +1,8 @@
 # wt-cmux
 
-`wt-cmux` is a [git-wt](https://github.com/noamsiegel/git-wt) plugin for [cmux](https://github.com/manaflow-ai/cmux), the native macOS terminal multiplexer for AI coding agents.
+[git-wt](https://github.com/noamsiegel/git-wt) plugin for [cmux](https://github.com/manaflow-ai/cmux), the native macOS terminal multiplexer for AI coding agents.
 
-When `git-wt` creates a worktree, this plugin creates or selects a matching cmux workspace. When `git-wt` removes or focuses a worktree, this plugin closes or selects the matching cmux workspace.
+`wt-cmux` does one thing: bridge git-wt worktree lifecycle events to cmux workspaces. It implements `git-wt.plugin.v0`; the protocol source of truth is git-wt's [`docs/plugin-contract.md`](https://github.com/noamsiegel/git-wt/blob/main/docs/plugin-contract.md). Plugin-family comparison lives in git-wt's [`docs/plugins.md`](https://github.com/noamsiegel/git-wt/blob/main/docs/plugins.md).
 
 ## Install
 
@@ -12,23 +12,33 @@ From the git-wt registry:
 wt plugin install cmux
 ```
 
-Directly from GitHub:
+Explicit install from GitHub:
 
 ```bash
 wt plugin install noamsiegel/wt-cmux
 ```
 
-For local development:
+Local development:
 
 ```bash
 wt plugin link /path/to/wt-cmux
 ```
 
+## Behavior
+
+| git-wt event | cmux action |
+|---|---|
+| `wt:worktree-created` | Create a cmux workspace, attach `git-wt` metadata, and send `cd <worktree>` to the terminal. If a workspace for the worktree already exists, select it instead. |
+| `wt:worktree-removed` | Find the cmux workspace by stored worktree path metadata and close it. Missing workspace is a no-op. |
+| `wt:focus` | Find the cmux workspace by stored worktree path metadata and select it. Missing workspace returns `not-found`. |
+
+cmux calls use the public CLI documented at <https://cmux.com/docs/api>: `new-workspace`, `list-workspaces --json`, `current-workspace --json`, `select-workspace`, `close-workspace`, `set-status`, `log`, `send`, and `send-key`.
+
 ## Requirements
 
-- `git-wt` with `git-wt.plugin.v0` support
-- cmux CLI available as `cmux`
-- `yq` for JSON parsing
+- `git-wt` with `git-wt.plugin.v0` support.
+- cmux CLI available as `cmux`, or `WT_CMUX_BIN` pointing to the cmux binary.
+- `yq` for JSON parsing.
 
 cmux installs its CLI inside the macOS app bundle. If it is not on `PATH`, create the symlink documented by cmux:
 
@@ -44,16 +54,6 @@ CMUX_SOCKET_MODE=allowAll
 
 or equivalent cmux Settings access.
 
-## Behavior
-
-| git-wt event | cmux action |
-| --- | --- |
-| `wt:worktree-created` | Create a cmux workspace, attach `git-wt` metadata, and send `cd <worktree>` to the terminal. If a workspace for the worktree already exists, select it instead. |
-| `wt:worktree-removed` | Find the cmux workspace by stored worktree path metadata and close it. Missing workspace is a no-op. |
-| `wt:focus` | Find the cmux workspace by stored worktree path metadata and select it. Missing workspace returns `not-found`. |
-
-cmux calls use the public CLI documented at `https://cmux.com/docs/api`: `new-workspace`, `list-workspaces --json`, `current-workspace --json`, `select-workspace`, `close-workspace`, `set-status`, `log`, `send`, and `send-key`.
-
 ## Commands
 
 ```bash
@@ -63,22 +63,19 @@ wt-cmux event wt:worktree-created < payload.json
 wt-cmux --version
 ```
 
-`WT_CMUX_BIN=/path/to/cmux` overrides cmux CLI discovery.
+## Environment
 
-## Manifest
+- `WT_CMUX_BIN=/path/to/cmux` overrides cmux CLI discovery.
+- `CMUX_SOCKET_PATH=/path/to/cmux.sock` overrides the socket path checked by `health`; default is `/tmp/cmux.sock`.
+- `CMUX_SOCKET_MODE=allowAll` is a cmux-side setting often needed when git-wt runs outside cmux.
 
-```json
-{
-  "name": "cmux",
-  "executable": "wt-cmux",
-  "api_versions": ["git-wt.plugin.v0"],
-  "events": ["wt:worktree-created", "wt:worktree-removed", "wt:focus"],
-  "capabilities": ["tab.focus", "tab.close"],
-  "version": "0.1.0",
-  "source": "https://github.com/noamsiegel/wt-cmux",
-  "description": "cmux terminal multiplexer integration for git-wt"
-}
-```
+## What it doesn't do
+
+- Does not define the git-wt plugin API; git-wt owns `git-wt.plugin.v0`.
+- Does not install, update, or configure cmux.
+- Does not manage git worktree naming, branch policy, or cleanup policy.
+- Does not create terminal panes beyond the cmux workspace's initial terminal.
+- Does not make removal fatal when the matching cmux workspace is already gone.
 
 ## Development
 
