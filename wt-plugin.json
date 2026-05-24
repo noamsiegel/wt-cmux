@@ -1,0 +1,10 @@
+{
+  "name": "cmux",
+  "executable": "wt-cmux",
+  "api_versions": ["git-wt.plugin.v0"],
+  "events": ["wt:worktree-created", "wt:worktree-removed", "wt:focus"],
+  "capabilities": ["tab.focus", "tab.close"],
+  "version": "0.1.0",
+  "source": "https://github.com/noamsiegel/wt-cmux",
+  "description": "cmux terminal multiplexer integration for git-wt"
+}

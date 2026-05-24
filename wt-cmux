@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+# wt-cmux — git-wt plugin for the cmux terminal multiplexer.
+#
+# Plugin contract:
+#   wt-cmux manifest                    → prints wt-plugin.json
+#   wt-cmux health                      → prints cmux/yq/socket availability
+#   wt-cmux event <event-name> < json   → handles one lifecycle event
+
+set -euo pipefail
+IFS=$'\n\t'
+
+VERSION="0.1.0"
+DEFAULT_SOCKET="/tmp/cmux.sock"
+
+err() { printf '%s\n' "$*" >&2; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+cmux_bin() {
+  if [[ -n "${WT_CMUX_BIN:-}" ]]; then
+    printf '%s' "$WT_CMUX_BIN"
+  else
+    command -v cmux 2>/dev/null || true
+  fi
+}
+
+socket_path() {
+  printf '%s' "${CMUX_SOCKET_PATH:-$DEFAULT_SOCKET}"
+}
+
+json_get() {
+  local payload="$1" expr="$2"
+  printf '%s' "$payload" | yq -p json -r "$expr" 2>/dev/null || true
+}
+
+worktree_id() {
+  json_get "$1" '.worktree.id // .id // ""'
+}
+
+worktree_path() {
+  json_get "$1" '.worktree.path // .path // ""'
+}
+
+repo_name() {
+  json_get "$1" '.repo.name // (.worktree.path | split("/") | .[-2]) // ""'
+}
+
+json_string() {
+  VALUE="$1" yq -n -o json 'strenv(VALUE)'
+}
+
+workspace_label() {
+  local repo="$1" id="$2"
+  if [[ -n "$repo" ]]; then
+    printf '%s — %s' "$repo" "$id"
+  else
+    printf '%s' "$id"
+  fi
+}
+
+list_workspaces_json() {
+  local bin="$1"
+  "$bin" list-workspaces --json
+}
+
+workspace_id_for_path() {
+  local bin="$1" path="$2" label="${3:-}" list rp_path
+  list=$(list_workspaces_json "$bin" 2>/dev/null || true)
+  [[ -n "$list" ]] || return 1
+  rp_path=$(realpath "$path" 2>/dev/null || printf '%s' "$path")
+
+  # cmux JSON has changed shape across releases. Accept common result wrappers
+  # and look for either cwd/path or our stable wt-cmux status key.
+  printf '%s' "$list" | PATH_ARG="$path" RP_PATH_ARG="$rp_path" LABEL_ARG="$label" \
+    yq -p json -r '
+      (.result.workspaces // .workspaces // .[])[]? |
+      select(
+        .cwd == strenv(PATH_ARG) or .cwd == strenv(RP_PATH_ARG) or
+        .path == strenv(PATH_ARG) or .path == strenv(RP_PATH_ARG) or
+        .working_directory == strenv(PATH_ARG) or .working_directory == strenv(RP_PATH_ARG) or
+        .status["git-wt.path"] == strenv(PATH_ARG) or .status["git-wt.path"] == strenv(RP_PATH_ARG) or
+        .metadata["git-wt.path"] == strenv(PATH_ARG) or .metadata["git-wt.path"] == strenv(RP_PATH_ARG) or
+        (.title == strenv(LABEL_ARG) and strenv(LABEL_ARG) != "") or
+        (.name == strenv(LABEL_ARG) and strenv(LABEL_ARG) != "") or
+        (.label == strenv(LABEL_ARG) and strenv(LABEL_ARG) != "")
+      ) |
+      .workspace_id // .id // .uuid // .ref // ""
+    ' 2>/dev/null | { IFS= read -r first || true; printf '%s' "$first"; }
+}
+
+select_workspace() {
+  local bin="$1" workspace_id="$2"
+  "$bin" select-workspace --workspace "$workspace_id" >/dev/null
+}
+
+annotate_workspace() {
+  local bin="$1" workspace_id="$2" path="$3" id="$4" label="$5"
+
+  "$bin" set-status git-wt.path "$path" --workspace "$workspace_id" >/dev/null 2>&1 || true
+  "$bin" set-status git-wt.id "$id" --workspace "$workspace_id" >/dev/null 2>&1 || true
+  "$bin" set-status git-wt "managed" --workspace "$workspace_id" --icon git-branch --color '#7c3aed' --priority 80 >/dev/null 2>&1 || true
+  "$bin" log --workspace "$workspace_id" --source wt-cmux "git-wt linked: $label" >/dev/null 2>&1 || true
+}
+
+create_workspace() {
+  local bin="$1" path="$2" id="$3" label="$4" created workspace_id output
+
+  output=$("$bin" new-workspace --json 2>/dev/null || "$bin" new-workspace 2>/dev/null || true)
+  if [[ -n "$output" ]]; then
+    workspace_id=$(printf '%s' "$output" | yq -p json -r '.result.workspace_id // .result.workspace.id // .workspace_id // .workspace.id // .id // ""' 2>/dev/null || true)
+  else
+    workspace_id=""
+  fi
+
+  if [[ -z "$workspace_id" ]]; then
+    # Some cmux builds do not return the created workspace. Ask for current.
+    output=$("$bin" current-workspace --json 2>/dev/null || true)
+    workspace_id=$(printf '%s' "$output" | yq -p json -r '.result.workspace_id // .result.workspace.id // .workspace_id // .workspace.id // .id // ""' 2>/dev/null || true)
+  fi
+
+  [[ -n "$workspace_id" ]] || return 1
+
+  annotate_workspace "$bin" "$workspace_id" "$path" "$id" "$label"
+
+  # Ensure first terminal lands in the git-wt worktree even if cmux created the
+  # workspace from the plugin's install directory.
+  "$bin" send "cd $(printf '%q' "$path")" >/dev/null 2>&1 || true
+  "$bin" send-key enter >/dev/null 2>&1 || true
+
+  printf '%s' "$workspace_id"
+}
+
+handle_created() {
+  local payload="$1" bin="$2" id path repo label workspace_id
+  id=$(worktree_id "$payload")
+  path=$(worktree_path "$payload")
+  repo=$(repo_name "$payload")
+  [[ -n "$id" && -n "$path" ]] || { err "wt-cmux: missing worktree id/path in payload"; exit 2; }
+
+  label=$(workspace_label "$repo" "$id")
+  workspace_id=$(workspace_id_for_path "$bin" "$path" "$label" || true)
+  if [[ -n "$workspace_id" ]]; then
+    select_workspace "$bin" "$workspace_id" || true
+    printf '{"status":"ok","handle":%s,"action":"selected-existing"}\n' "$(json_string "$workspace_id")"
+    return 0
+  fi
+
+  workspace_id=$(create_workspace "$bin" "$path" "$id" "$label") || { printf '{"status":"error","reason":"create-workspace-failed"}\n'; exit 30; }
+  printf '{"status":"ok","handle":%s,"action":"created-workspace"}\n' "$(json_string "$workspace_id")"
+}
+
+handle_removed() {
+  local payload="$1" bin="$2" id path repo label workspace_id
+  id=$(worktree_id "$payload")
+  path=$(worktree_path "$payload")
+  repo=$(repo_name "$payload")
+  [[ -n "$path" ]] || { err "wt-cmux: missing worktree path in payload"; exit 2; }
+
+  label=$(workspace_label "$repo" "$id")
+  workspace_id=$(workspace_id_for_path "$bin" "$path" "$label" || true)
+  if [[ -z "$workspace_id" ]]; then
+    printf '{"status":"noop","reason":"no-workspace"}\n'
+    return 0
+  fi
+
+  if "$bin" close-workspace --workspace "$workspace_id" >/dev/null; then
+    printf '{"status":"ok","handle":%s}\n' "$(json_string "$workspace_id")"
+  else
+    printf '{"status":"error","reason":"close-workspace-failed"}\n'
+    exit 30
+  fi
+}
+
+handle_focus() {
+  local payload="$1" bin="$2" id path repo label workspace_id
+  id=$(worktree_id "$payload")
+  path=$(worktree_path "$payload")
+  repo=$(repo_name "$payload")
+  [[ -n "$path" ]] || { err "wt-cmux: missing worktree path in payload"; exit 2; }
+
+  label=$(workspace_label "$repo" "$id")
+  workspace_id=$(workspace_id_for_path "$bin" "$path" "$label" || true)
+  if [[ -z "$workspace_id" ]]; then
+    printf '{"status":"not-found"}\n'
+    exit 20
+  fi
+
+  if select_workspace "$bin" "$workspace_id"; then
+    printf '{"status":"ok","handle":%s}\n' "$(json_string "$workspace_id")"
+  else
+    printf '{"status":"error","reason":"focus-workspace-failed"}\n'
+    exit 30
+  fi
+}
+
+cmd_manifest() {
+  local self_dir
+  self_dir=$(cd "$(dirname "$0")" && pwd)
+  cat "$self_dir/wt-plugin.json"
+}
+
+cmd_health() {
+  local bin sock ok=true reason=()
+  bin=$(cmux_bin)
+  sock=$(socket_path)
+
+  if [[ -z "$bin" ]]; then
+    ok=false
+    reason+=("cmux CLI not found")
+  fi
+  if ! have yq; then
+    ok=false
+    reason+=("yq not installed")
+  fi
+  if [[ ! -S "$sock" ]]; then
+    ok=false
+    reason+=("cmux socket not available at $sock")
+  fi
+  if [[ -n "$bin" ]] && ! "$bin" ping >/dev/null 2>&1; then
+    ok=false
+    reason+=("cmux ping failed")
+  fi
+
+  if [[ "$ok" == true ]]; then
+    printf '{"ok":true,"cmux":%s,"socket":%s,"yq":%s}\n' \
+      "$(json_string "$bin")" "$(json_string "$sock")" "$(json_string "$(command -v yq)")"
+  else
+    local joined="${reason[*]}"
+    printf '{"ok":false,"reason":%s,"cmux":%s,"socket":%s}\n' \
+      "$(json_string "$joined")" "$(json_string "$bin")" "$(json_string "$sock")"
+    exit 30
+  fi
+}
+
+cmd_event() {
+  local event="${1:-}" bin payload
+  [[ -n "$event" ]] || { err "wt-cmux: usage: wt-cmux event <event-name>"; exit 2; }
+  bin=$(cmux_bin)
+  [[ -n "$bin" ]] || { err "wt-cmux: cmux CLI not found"; exit 30; }
+  have yq || { err "wt-cmux: yq not installed"; exit 30; }
+
+  payload=$(cat)
+
+  case "$event" in
+    wt:worktree-created) handle_created "$payload" "$bin" ;;
+    wt:worktree-removed) handle_removed "$payload" "$bin" ;;
+    wt:focus)            handle_focus "$payload" "$bin" ;;
+    *)                   printf '{"status":"ignored","event":%s}\n' "$(json_string "$event")" ;;
+  esac
+}
+
+main() {
+  case "${1:-}" in
+    manifest) cmd_manifest ;;
+    health) cmd_health ;;
+    event) shift; cmd_event "$@" ;;
+    --version|-V) printf '%s\n' "$VERSION" ;;
+    -h|--help|help|"")
+      cat <<'EOF'
+wt-cmux — cmux plugin for git-wt.
+
+usage:
+  wt-cmux manifest             print plugin manifest JSON
+  wt-cmux health               check cmux CLI/socket/yq availability
+  wt-cmux event <name> < json  handle one lifecycle event
+  wt-cmux --version            print version
+
+Events: wt:worktree-created, wt:worktree-removed, wt:focus.
+
+Requires cmux CLI access from PATH or WT_CMUX_BIN. If running outside cmux,
+cmux may require CMUX_SOCKET_MODE=allowAll or compatible Settings access.
+EOF
+      ;;
+    *)
+      err "wt-cmux: unknown subcommand: $1"
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"
